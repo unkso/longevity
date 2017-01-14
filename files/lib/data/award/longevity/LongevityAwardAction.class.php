@@ -7,7 +7,7 @@ class LongevityAwardAction extends AbstractDatabaseObjectAction
 	/**
 	 * @inheritDoc
 	 */
-    protected $className = LongeviyAward::class;
+    protected $className = LongevityAwardEditor::class;
 
 	/**
 	 * @inheritDoc

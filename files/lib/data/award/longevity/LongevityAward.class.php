@@ -1,5 +1,6 @@
 <?php namespace wcf\data\award\longevity;
 
+use wcf\data\award\AwardTier;
 use wcf\data\DatabaseObject;
 
 class LongevityAward extends DatabaseObject
@@ -16,6 +17,7 @@ class LongevityAward extends DatabaseObject
 
 	public function getTierName()
 	{
-		return '';
+		$tier = AwardTier::getTierByID($this->tierID);
+		return $tier->getAward()->title . $tier->levelSuffix;
 	}
 }
