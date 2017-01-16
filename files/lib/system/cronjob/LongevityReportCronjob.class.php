@@ -1,5 +1,7 @@
 <?php
 namespace wcf\system\cronjob;
+use wcf\data\award\AwardTier;
+use wcf\data\award\issued\IssuedAward;
 use wcf\data\cronjob\Cronjob;
 use wbb\data\thread\Thread;
 use wbb\data\thread\ThreadAction;
@@ -9,6 +11,7 @@ use wbb\data\post\PostAction;
 use wbb\data\post\PostEditor;
 use wbb\data\board\Board;
 use wbb\data\board\BoardCache;
+use wcf\data\user\User;
 use wcf\util\DateUtil;
 use wcf\system\WCF;
 
@@ -206,30 +209,16 @@ class LongevityReportCronjob extends AbstractCronjob
 			// Add eligible award for the user, if not a RT
 			$isRecruit = false;
 			if ( strcasecmp( substr($user["username"], 0, 2), "RT") != 0 ) {
-				$awardAdded = false;
 				$insertDate = date_format( date_create("now"), "Y-m-d" );
-				$insertUserID = $user["userID"];
-				$insertTierID = $eligibleTierID;
-				$insertDescription = $eligibleDescription;
-				$sql = "INSERT INTO wcf".WCF_N."_unkso_issued_award
-					(userID, tierID, description, date) VALUES (?, ?, ?, ?)";
-				$statement = WCF::getDB()->prepareStatement($sql);
-				$statement->execute(array($insertUserID, $insertTierID, $insertDescription, $insertDate));
 
-				// Check success
-				$sql = "SELECT 		a.*
-					FROM		wcf".WCF_N."_unkso_issued_award AS a
-					WHERE		a.tierID = ?
-					AND		a.userID = ?
-					LIMIT 		1";
-				$statement = WCF::getDB()->prepareStatement($sql);
-				$statement->execute(array($eligibleTierID, $user["userID"]));
-				$row = $statement->fetchArray();
-				if (empty($row)) {
-					$awardAdded = false;
-				} else {
-					$awardAdded = true;
-				}
+				$tier = AwardTier::getTierByID($eligibleTierID); // Received tier
+				$user = new User($user['userID']); // Receiving user
+				$author = new User(5517); // Automated Account
+
+                // Give the award
+				$result = IssuedAward::giveToUser($user, $tier, $description, $insertDate, true, $author);
+
+				$awardAdded = $result ? true : false;
 			} else {
 				$isRecruit = true;	
 			}

@@ -58,7 +58,6 @@ class LongevityAwardEditForm extends LongevityAwardAddForm
 	{
 		parent::readParameters();
 
-		var_dump($_REQUEST['id']);
 		if (isset($_REQUEST['id'])) $this->longevityAwardID = intval($_REQUEST['id']);
 		$this->longevityAward = new LongevityAward($this->longevityAwardID);
 		if (!$this->longevityAward->longevityAwardID) {
