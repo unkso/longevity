@@ -64,33 +64,35 @@ class LongevityReportCronjob extends AbstractCronjob
 			);
 		}
 
+		// Sort the userLongevity array by computed sortorder
 		usort($userLongevity, array($this,'sortByOrder'));
 
+		// Build upcoming anniversary list
 		$upcomingAnniversaries = array();
-		$pastAnniversaries = array();
-		$newRecruits = array();
-
-
-
-		$reportText	=  "";
 		foreach ( $userLongevity as $userID => $user) {
 			if ( $user["longevity"]["anniversary"] > 0 ) {
 				$upcomingAnniversaries[] = $user;
 			}
 		}
 
+		// Build past anniversary list
+		$pastAnniversaries = array();
 		foreach ( $userLongevity as $userID => $user) {
 			if ( $user["longevity"]["anniversary"] < 0 && $user["longevity"]["y"] > 0 ) {
 				$pastAnniversaries[] = $user;
 			}
 		}
 
+		// Build new Recruit list
+		$newRecruits = array();
 		foreach ( $userLongevity as $userID => $user) {
 			if ( $user["longevity"]["anniversary"] < 0 && $user["longevity"]["y"] == 0) {
 				$newRecruits[] = $user;
 			}
 		}
 
+		// Start building the report text
+		$reportText	=  "";
 		$reportText	.= "[block][size=18]Upcoming Anniversaries[/size][/block]";
 		if (count($upcomingAnniversaries)) {
 			foreach ($upcomingAnniversaries as $key => $user) {
@@ -122,13 +124,12 @@ class LongevityReportCronjob extends AbstractCronjob
 		$reportText 	.= "[table]";
 		$reportText 	.= "[tr][td]User/Status[/td][td]Enlisted/Should Have[/td][td]Longevity/Has[/td][/tr]";
 		$reportText	.= "[tr][td][/td][td][/td][td][/td][/tr]";
-		//$reportText	.= "<tbody>";
+		
 		foreach ($userLongevity as $userID => $user) {
-			// Check for presence of correct award
-			// Simple check assuming 30 days/month and 365/year
-			//var_dump($user["longevity"]);
+			// Get total months longevity
 			$totalMonths = $user["longevity"]["months"];
 
+			// Determine eligible longevity tier from master index
 			$eligibleTierID = -1;
 			for ($i=0; $i<count($awardsIndex); $i++) {
 				if ($totalMonths >= $awardsIndex[$i]["minMonths"]) {
@@ -136,6 +137,7 @@ class LongevityReportCronjob extends AbstractCronjob
 				}
 			}
 
+			// Check if the member has their eligible tier
 			$sql = "SELECT 		a.*
 				FROM		wcf".WCF_N."_unkso_issued_award AS a
 				WHERE		a.tierID = ?
@@ -150,6 +152,7 @@ class LongevityReportCronjob extends AbstractCronjob
 				$hasEligibleTier = true;
 			}
 
+			// Get the award details for the eligible tier for later use
 			$sql = "SELECT 		t.*, a.title, a.description
 				FROM		wcf".WCF_N."_unkso_award_tier AS t
 				INNER JOIN	wcf".WCF_N."_unkso_award AS a
@@ -165,6 +168,7 @@ class LongevityReportCronjob extends AbstractCronjob
 				$eligibleDescription = $row["description"];
 			}
 
+			// Get all awards issued to this user
 			$sql = "SELECT		ia.*, t.ribbonURL, t.level, a.title
 				FROM		wcf".WCF_N."_unkso_issued_award AS ia
 				INNER JOIN	wcf".WCF_N."_unkso_award_tier AS t
@@ -179,10 +183,10 @@ class LongevityReportCronjob extends AbstractCronjob
 				$userAwards[] = $row;
 			}
 
+			// Check to find the highest longevity award issued to this user
 			$highestName = "Unknown";
 			$highestLevel = "[?]";
 			$highestURL = "blank";
-
 			for ($i=count($awardsIndex)-1; $i>=0; $i--) {
 				$found = false;
 
@@ -199,52 +203,58 @@ class LongevityReportCronjob extends AbstractCronjob
 				if($found) break;
 			}
 
-			// Add eligible award for the user
-			$awardAdded = false;
-			//if ($user["userID"]==4635) {
-			$insertDate = date_format( date_create("now"), "Y-m-d" );
-			$insertUserID = $user["userID"];
-			$insertTierID = $eligibleTierID;
-			$insertDescription = $eligibleDescription;
-			$sql = "INSERT INTO wcf".WCF_N."_unkso_issued_award
-				(userID, tierID, description, date) VALUES (?, ?, ?, ?)";
-			$statement = WCF::getDB()->prepareStatement($sql);
-			$statement->execute(array($insertUserID, $insertTierID, $insertDescription, $insertDate));
-
-			// Check success
-			$sql = "SELECT 		a.*
-				FROM		wcf".WCF_N."_unkso_issued_award AS a
-				WHERE		a.tierID = ?
-				AND		a.userID = ?
-				LIMIT 		1";
-			$statement = WCF::getDB()->prepareStatement($sql);
-			$statement->execute(array($eligibleTierID, $user["userID"]));
-			$row = $statement->fetchArray();
-			if (empty($row)) {
+			// Add eligible award for the user, if not a RT
+			$isRecruit = false;
+			if ( strcasecmp( substr($user["username"], 0, 2), "RT") != 0 ) {
 				$awardAdded = false;
-			} else {
-				$awardAdded = true;
-			}
-			//}
+				$insertDate = date_format( date_create("now"), "Y-m-d" );
+				$insertUserID = $user["userID"];
+				$insertTierID = $eligibleTierID;
+				$insertDescription = $eligibleDescription;
+				$sql = "INSERT INTO wcf".WCF_N."_unkso_issued_award
+					(userID, tierID, description, date) VALUES (?, ?, ?, ?)";
+				$statement = WCF::getDB()->prepareStatement($sql);
+				$statement->execute(array($insertUserID, $insertTierID, $insertDescription, $insertDate));
 
-			//if (!$hasEligibleTier) {
-				$reportText	.= "[tr][td]";
-				$reportText	.= "[size=14]".$user["username"]."[/size]";
-				$reportText	.= "[/td][td]";
-				$reportText	.= $user["enlistment"];
-				$reportText	.= "[/td][td]";
-
-				if ($user["longevity"]) {
-					//$reportText	.= $user["longevity"]["y"] . "y, " . $user["longevity"]["m"] . "m, " . $user["longevity"]["d"] . "d (" . $user["longevity"]["months"] . " months)";
-					$reportText .=  $user["longevity"]["interval"];
+				// Check success
+				$sql = "SELECT 		a.*
+					FROM		wcf".WCF_N."_unkso_issued_award AS a
+					WHERE		a.tierID = ?
+					AND		a.userID = ?
+					LIMIT 		1";
+				$statement = WCF::getDB()->prepareStatement($sql);
+				$statement->execute(array($eligibleTierID, $user["userID"]));
+				$row = $statement->fetchArray();
+				if (empty($row)) {
+					$awardAdded = false;
 				} else {
-					$reportText	.= "Unknown";
+					$awardAdded = true;
 				}
-				$reportText	.= "[/td]";
+			} else {
+				$isRecruit = true;	
+			}
+			
+			// Back to building the report
+			$reportText	.= "[tr][td]";
+			$reportText	.= "[size=14]".$user["username"]."[/size]";
+			$reportText	.= "[/td][td]";
+			$reportText	.= $user["enlistment"];
+			$reportText	.= "[/td][td]";
 
-				$reportText	.= "[/tr]";
-				$reportText	.= "[tr]";
-				$reportText	.= "[td]";
+			// In case longevity did not compute for some reason
+			if ($user["longevity"]) {
+				$reportText .=  $user["longevity"]["interval"];
+			} else {
+				$reportText .= "Unknown";
+			}
+			$reportText	.= "[/td]";
+
+			$reportText	.= "[/tr]";
+			$reportText	.= "[tr]";
+			$reportText	.= "[td]";
+			
+			// If they have the correct tier award, and whether it was added
+			if (!$isRecruit) {
 				if ($hasEligibleTier) { $reportText .= "ok"; }
 				else {
 					if ($awardAdded) {
@@ -253,25 +263,28 @@ class LongevityReportCronjob extends AbstractCronjob
 						$reportText .= "Error adding award!";
 					}
 				}
-				$reportText	.= "[/td]";
-				$reportText	.= "[td]";
-				$reportText	.= "[block]".$eligibleName." [".$eligibleLevel."][/block][img]".$eligibleURL."[/img]";
-				$reportText	.= "[/td]";
-				$reportText	.= "[td]";
-				$reportText	.= "[block]".$highestName." [".$highestLevel."][/block][img]".$highestURL."[/img]";
-				$reportText	.= "[/td]";
-				//$reportText	.= "[td]";
-				//$reportText	.= "[/td]";
-				$reportText	.= "[/tr]";
-			//}
+			} else {
+				$reportText .= "Recruit; not yet eligible";	
+			}
+			
+			// Other award details, highest/eligible
+			$reportText	.= "[/td]";
+			$reportText	.= "[td]";
+			$reportText	.= "[block]".$eligibleName." [".$eligibleLevel."][/block][img]".$eligibleURL."[/img]";
+			$reportText	.= "[/td]";
+			$reportText	.= "[td]";
+			$reportText	.= "[block]".$highestName." [".$highestLevel."][/block][img]".$highestURL."[/img]";
+			$reportText	.= "[/td]";
+			$reportText	.= "[/tr]";
 
 			$eligibleName = $eligibleLevel = $eligibleURL = null;
 			$highestName = $highestLevel = $highestURL = null;
 			$hasEligibleTier = null;
+			$isRecruit = false;
 		}
 		$reportText 	.= "[/table]";
-		//var_dump($reportText);
-
+		
+		// Current date in correct format
 		$theDate = DateUtil::format(DateUtil::getDateTimeByTimestamp(TIME_NOW), DateUtil::DATE_FORMAT);
 
 		// Create the thread
@@ -282,17 +295,18 @@ class LongevityReportCronjob extends AbstractCronjob
 		$lastPostTime = TIME_NOW;
 		$isClosed = 1;
 
+		// Insert thread into db
 		$sql = "INSERT INTO wbb".WCF_N."_thread
 				    (boardID, topic, time, username, lastPostTime, isClosed)
 			     VALUES ('$boardID', '$topic', '$nowTime', '$username', '$lastPostTime', '$isClosed')";
 		$statement = WCF::getDB()->prepareStatement($sql);
 		$statement->execute();
 
+		// Get last insert ID for post building
 		$lastInsertID = WCF::getDB()->getInsertID("wbb".WCF_N."_thread", "threadID");
 
 		// Create the post
 		$thread = new Thread($lastInsertID);
-
 		$board = BoardCache::getInstance()->getBoard($boardID);
 
 		$postData = array(
@@ -314,6 +328,7 @@ class LongevityReportCronjob extends AbstractCronjob
 			'attachmentHandler' => null
 		);
 
+		// Make the post
 		$postAction = new PostAction(array(), 'create', $postCreateParameters);
 		$resultValues = $postAction->executeAction();
 
@@ -327,6 +342,11 @@ class LongevityReportCronjob extends AbstractCronjob
 	}
 
 	public function getLongevity($date) {
+		/* 
+		* Validate the date format is ####-##-##
+		* Should be sufficient until membership plugin is done with the 
+		* membership data available and validated in the db already
+		*/ 
 		if (preg_match("/^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[1-2][0-9]|3[0-1])$/",$date)) {
 			$datetime1 = date_format ( date_create($date), "U" );
 			$datetime2 = date_format ( date_create("now"), "U" );
@@ -372,44 +392,69 @@ class LongevityReportCronjob extends AbstractCronjob
 	}
 
 	public function getSortOrder($userTitle) {
+		/* 
+		* This paygrade check is placeholder until membership
+		* plugin is ready with that data available. Currently 
+		* just checks usertitle and extracts paygrade.
+		*/
 		if ($userTitle == "" || $userTitle == null) {
 			return -1;
 		}
 
+		// Get text between parentheses
 		preg_match('#\((.*?)\)#', trim($userTitle), $paygrade);
 		if( $paygrade === false || count($paygrade)==0 ) {
 			return -1;
 		}
 
+		// Do some text sanitizing
 		$removeChars = array("-", "_", "[", "]", " ");
 		$paygrade = str_replace($removeChars, "", $paygrade[1]);
 
+		// Find the paygrade letter and number
 		$letter = $paygrade[0];
 		$number = substr($paygrade, 1, 2);
 
+		// Add 20 to ranks starting with "O" for sorting
 		if ($letter=="O" || $letter=="o") {
 			return $number+20;
 		}
 
+		// Add 10 to ranks starting with "W" for sorting
 		if ($letter=="W" || $letter=="w") {
 			$number = substr($paygrade, 2, 2);
 			return $number+10;
 		}
 
+		// Add nothing to all other ranks for sorting
 		return $number;
 	}
 
 	public function sortByOrder($a, $b) {
 		if ($b['sortorder'] == $a['sortorder']) {
+			// Tried sorting by name, not including rank prefix
 			$nameA = substr( strstr($a['username'], '.'), 1);
 			$nameB = substr( strstr($b['username'], '.'), 1);
 
+			// Tried sorting by name, including rank prefix
 			return $b["username"] - $a["username"];
+			
+			// Neither work quite as expected.. need a name sorting solution.
 		}
 
 		return $b['sortorder'] - $a['sortorder'];
 	}
 
+	/* 
+	* Adapted function from DateUtil class. Removed weeks/hours/minutes
+	* 
+	* Returns a formatted date interval. If $fullInterval is set true, the
+	* complete interval is returned, otherwise a rounded interval is used.
+	* 
+	* @param	\DateInterval	$interval
+	* @param	boolean		$fullInterval
+	* @return	string
+	*/ 
 	public static function myFormatInterval(\DateInterval $interval, $fullInterval = false) {
 		$years = $interval->format('%y');
 		$months = $interval->format('%m');
