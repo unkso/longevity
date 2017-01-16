@@ -127,7 +127,7 @@ class LongevityReportCronjob extends AbstractCronjob
 		$reportText 	.= "[table]";
 		$reportText 	.= "[tr][td]User/Status[/td][td]Enlisted/Should Have[/td][td]Longevity/Has[/td][/tr]";
 		$reportText	.= "[tr][td][/td][td][/td][td][/td][/tr]";
-		
+
 		foreach ($userLongevity as $userID => $user) {
 			// Get total months longevity
 			$totalMonths = $user["longevity"]["months"];
@@ -156,20 +156,11 @@ class LongevityReportCronjob extends AbstractCronjob
 			}
 
 			// Get the award details for the eligible tier for later use
-			$sql = "SELECT 		t.*, a.title, a.description
-				FROM		wcf".WCF_N."_unkso_award_tier AS t
-				INNER JOIN	wcf".WCF_N."_unkso_award AS a
-				ON		t.awardID = a.awardID
-				WHERE		t.tierID = ?
-				LIMIT		1";
-			$statement = WCF::getDB()->prepareStatement($sql);
-			$statement->execute(array($eligibleTierID));
-			while ($row = $statement->fetchArray()) {
-				$eligibleURL = $row["ribbonURL"];
-				$eligibleName = $row["title"];
-				$eligibleLevel = $row["level"];
-				$eligibleDescription = $row["description"];
-			}
+            $eligibleTierObject = AwardTier::getTierByID($eligibleTierID);
+            $eligibleURL = $eligibleTierObject->ribbonURL;
+            $eligibleName = $eligibleTierObject->getAward()->title;
+            $eligibleLevel = $eligibleTierObject->level;
+            $eligibleDescription = $eligibleTierObject->getAward()->description;
 
 			// Get all awards issued to this user
 			$sql = "SELECT		ia.*, t.ribbonURL, t.level, a.title
@@ -207,8 +198,8 @@ class LongevityReportCronjob extends AbstractCronjob
 			}
 
 			// Add eligible award for the user, if not a RT
-			$isRecruit = false;
-			if ( strcasecmp( substr($user["username"], 0, 2), "RT") != 0 ) {
+			$isRecruit = strcasecmp( substr($user["username"], 0, 2), "RT") == 0;
+			if (!$isRecruit && !$hasEligibleTier) {
 				$insertDate = date_format( date_create("now"), "Y-m-d" );
 
 				$tier = AwardTier::getTierByID($eligibleTierID); // Received tier
@@ -216,11 +207,9 @@ class LongevityReportCronjob extends AbstractCronjob
 				$author = new User(5517); // Automated Account
 
                 // Give the award
-				$result = IssuedAward::giveToUser($user, $tier, $description, $insertDate, true, $author);
+				$result = IssuedAward::giveToUser($user, $tier, $eligibleDescription, $insertDate, true, $author);
 
 				$awardAdded = $result ? true : false;
-			} else {
-				$isRecruit = true;	
 			}
 			
 			// Back to building the report
@@ -272,7 +261,7 @@ class LongevityReportCronjob extends AbstractCronjob
 			$isRecruit = false;
 		}
 		$reportText 	.= "[/table]";
-		
+
 		// Current date in correct format
 		$theDate = DateUtil::format(DateUtil::getDateTimeByTimestamp(TIME_NOW), DateUtil::DATE_FORMAT);
 
@@ -342,7 +331,7 @@ class LongevityReportCronjob extends AbstractCronjob
 
 			$diff = date_diff(date_create($date),date_create("now"));
 			$diffFormatted = $this->myFormatInterval($diff, true);
-			//var_dump(DateUtil::formatInterval($diff, true));
+			//(DateUtil::formatInterval($diff, true));
 
 			$years = $diff->format('%y');
 			$months = $diff->format('%m');
