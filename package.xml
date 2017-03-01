@@ -21,6 +21,7 @@
 	<instructions type="install">
 		<instruction type="file">files.tar</instruction>
 		<instruction type="acpTemplate">acpTemplates.tar</instruction>
+		<instruction type="template">templates.tar</instruction>
 		<instruction type="sql">install.sql</instruction>
 
 		<!-- XMLs -->

@@ -1,22 +1,142 @@
-<?php
-namespace wcf\system\cronjob;
-use wcf\data\award\AwardTier;
+<?php namespace wcf\system\cronjob;
+
+use DateInterval;
+use DateTime;
+use wcf\data\award\Award;
 use wcf\data\award\issued\IssuedAward;
 use wcf\data\cronjob\Cronjob;
 use wbb\data\thread\Thread;
-use wbb\data\thread\ThreadAction;
 use wbb\data\thread\ThreadEditor;
-use wbb\data\post\Post;
 use wbb\data\post\PostAction;
-use wbb\data\post\PostEditor;
-use wbb\data\board\Board;
 use wbb\data\board\BoardCache;
 use wcf\data\user\User;
+use wcf\system\cache\builder\IssuedAwardCacheBuilder;
+use wcf\system\template\TemplateEngine;
 use wcf\util\DateUtil;
 use wcf\system\WCF;
 
 class LongevityReportCronjob extends AbstractCronjob
 {
+    protected function getClanMembers()
+    {
+        // 18 is the ID of the "=US= Members" user group
+        $groupID = 18;
+        $sql = "SELECT 		u.userID
+			FROM		wcf".WCF_N."_user AS u
+			INNER JOIN 	wcf".WCF_N."_user_to_group AS g
+			ON		u.userID=g.userID
+			WHERE		g.groupID = ?";
+
+        $statement = WCF::getDB()->prepareStatement($sql);
+        $statement->execute([$groupID]);
+
+        // We're manually creating the users as opposed to just calling
+        // $statement->fetchObjects so we also get userOptions
+        $list = [];
+        while ($row = $statement->fetchArray()) {
+            $list[$row['userID']] = new User($row['userID']);
+        }
+
+        // Sort the list by each user's sort order
+        usort($list, function ($a, $b) {
+            $as = $this->getSortOrder($a->userTitle);
+            $bs = $this->getSortorder($b->userTitle);
+
+            if ($as > $bs) return -1;
+            if ($as < $bs) return 1;
+
+            return 0;
+        });
+
+        return $list;
+    }
+
+    protected function buildLongevityList($users)
+    {
+        foreach ($users as &$user) {
+            $user = [
+                'user' => $user,
+                'longevity' => $this->getLongevity($user->userOption40),
+            ];
+        }
+
+        return $users;
+    }
+
+    public static function getLongevityAwardIndex()
+    {
+        return [
+            ['minimum' => 0,  'awardID' => 1, 'awardedNumber' => 1],
+            ['minimum' => 3,  'awardID' => 1, 'awardedNumber' => 2],
+            ['minimum' => 6,  'awardID' => 1, 'awardedNumber' => 3],
+            ['minimum' => 12, 'awardID' => 1, 'awardedNumber' => 4],
+            ['minimum' => 18, 'awardID' => 2, 'awardedNumber' => 1],
+            ['minimum' => 24, 'awardID' => 2, 'awardedNumber' => 2],
+            ['minimum' => 30, 'awardID' => 2, 'awardedNumber' => 3],
+            ['minimum' => 36, 'awardID' => 2, 'awardedNumber' => 4],
+            ['minimum' => 42, 'awardID' => 3, 'awardedNumber' => 1],
+            ['minimum' => 48, 'awardID' => 3, 'awardedNumber' => 2],
+            ['minimum' => 54, 'awardID' => 3, 'awardedNumber' => 3],
+            ['minimum' => 60, 'awardID' => 3, 'awardedNumber' => 4],
+            ['minimum' => 66, 'awardID' => 4, 'awardedNumber' => 1],
+            ['minimum' => 72, 'awardID' => 4, 'awardedNumber' => 2],
+            ['minimum' => 78, 'awardID' => 4, 'awardedNumber' => 3],
+            ['minimum' => 84, 'awardID' => 4, 'awardedNumber' => 4],
+        ];
+    }
+
+    protected static function findMissingAwards($user)
+    {
+        $longevityInMonths = $user['longevity']['absoluteMonths'];
+        $requiredAwards = [];
+
+        foreach (self::getLongevityAwardIndex() as $award) {
+            if ($longevityInMonths >= $award['minimum']) {
+                // Add X months to enlistment date to build award datet
+                $awardDate = clone $user['longevity']['join'];
+                $awardDate->add(new DateInterval("P{$award['minimum']}M"));
+
+                $insert = array_merge($award, [
+                    'user' => $user['user'],
+                    'notify' => false,
+                    'date' => $awardDate->format('Y-m-d'),
+                    'description' => $award['minimum'] == 0
+                        ? 'This award goes to newly enlisted members. This award will be improved based on the length of time the member has been active in the clan.'
+                        : $award['minimum'] . ' months of service to the Unknown Soldiers.',
+                ]);
+                unset($insert['minimum']);
+
+                $requiredAwards[] = $insert;
+            } elseif (count($requiredAwards)) {
+                $lastAward = array_pop($requiredAwards);
+                $lastAward['notify'] = true; // Notify the user about the last award
+                $requiredAwards[] = $lastAward;
+
+                break; // The list is ordered, so from here on out the if statement will always be false
+            }
+        }
+
+        // Remove all items from the required list that the user already possesses
+        $hasAwards = [];
+        foreach (IssuedAward::getAllAwardsForUser($user['user']) as $issuedAward) {
+            foreach ($requiredAwards as $id => $requiredAward) {
+                if ($issuedAward->awardID == $requiredAward['awardID'] && $issuedAward->awardedNumber == $requiredAward['awardedNumber']) {
+                    $hasAwards[] = $issuedAward;
+                    unset($requiredAwards[$id]);
+                }
+            }
+        }
+
+        return ['has' => $hasAwards, 'required' => $requiredAwards];
+    }
+
+    protected function addAward($award)
+    {
+        $result = IssuedAward::giveToUser($award['user'], new Award($award['awardID']), $award['description'], $award['date'], $award['awardedNumber'], $award['notify']);
+
+        return $result;
+    }
+
 	/**
 	 * @see	\wcf\system\cronjob\ICronjob::execute()
 	 */
@@ -24,355 +144,181 @@ class LongevityReportCronjob extends AbstractCronjob
 	{
 		parent::execute($cronjob);
 
-		// Index of longevity awards (in months vs eligible tierID from `wcf1_unkso_award_tier`)
-		$awardsIndex = array(
-			array('minMonths' => 0, 'tierID' => 89),
-			array('minMonths' => 3, 'tierID' => 90),
-			array('minMonths' => 6, 'tierID' => 91),
-			array('minMonths' => 12, 'tierID' => 92),
-			array('minMonths' => 18, 'tierID' => 93),
-			array('minMonths' => 24, 'tierID' => 94),
-			array('minMonths' => 30, 'tierID' => 95),
-			array('minMonths' => 36, 'tierID' => 96),
-			array('minMonths' => 42, 'tierID' => 97),
-			array('minMonths' => 48, 'tierID' => 98),
-			array('minMonths' => 54, 'tierID' => 99),
-			array('minMonths' => 60, 'tierID' => 100),
-			array('minMonths' => 66, 'tierID' => 101),
-			array('minMonths' => 72, 'tierID' => 102),
-			array('minMonths' => 78, 'tierID' => 103),
-			array('minMonths' => 84, 'tierID' => 104)
-		);
+		// Get a sorted list of all clan members
+        $users = $this->getClanMembers();
 
-		// Compile longevity data
-		$groupID = 18; // US Members
-		$userLongevity = array();
-		$sql = "SELECT 		u.userID, u.username, o.userOption40, u.userTitle
-			FROM		wcf".WCF_N."_user AS u
-			INNER JOIN 	wcf".WCF_N."_user_to_group AS g
-			ON		u.userID=g.userID
-			LEFT JOIN	wcf".WCF_N."_user_option_value AS o
-			ON		u.userID=o.userID
-			WHERE		g.groupID = ?";
-		$statement = WCF::getDB()->prepareStatement($sql);
-		$statement->execute(array($groupID));
-		while ($row = $statement->fetchArray()) {
-			$userLongevity[$row["userID"]] = array(
-				'userID'	=> $row["userID"],
-				'username'	=> $row["username"],
-				'usertitle'	=> $row["userTitle"],
-				'enlistment' 	=> $row["userOption40"],
-				'sortorder'	=> (int)$this->getSortOrder($row["userTitle"]),
-				'longevity'	=> $this->getLongevity($row["userOption40"])
-			);
-		}
+        // Turn the sorted user list into a longevity list
+        $users = $this->buildLongevityList($users);
 
-		// Sort the userLongevity array by computed sortorder
-		usort($userLongevity, array($this,'sortByOrder'));
+        // Generate lists for upcoming and past anniversaries as well as new recruits
+        $lists = ['upcoming' => [], 'past' => [], 'recruits' => []];
+        foreach ($users as $userSettings) {
+            if ($userSettings['longevity']['anniversary'] > 0) $lists['upcoming'][] = $userSettings;
+            else {
+                if ($userSettings['longevity']['y'] > 0 && $userSettings['longevity']['anniversary'] < 0) $lists['past'][] = $userSettings;
+                else $lists['recruits'][] = $userSettings;
+            }
+        }
 
-		// Build upcoming anniversary list
-		$upcomingAnniversaries = array();
-		foreach ( $userLongevity as $userID => $user) {
-			if ( $user["longevity"]["anniversary"] > 0 ) {
-				$upcomingAnniversaries[] = $user;
-			}
-		}
+        $awardsToAdd = [];
+        $stats = [];
 
-		// Build past anniversary list
-		$pastAnniversaries = array();
-		foreach ( $userLongevity as $userID => $user) {
-			if ( $user["longevity"]["anniversary"] < 0 && $user["longevity"]["y"] > 0 ) {
-				$pastAnniversaries[] = $user;
-			}
-		}
+        // Get a list of all longevity awards each user has and should still receive
+        foreach ($users as $user) {
+            $additionalFields = [];
 
-		// Build new Recruit list
-		$newRecruits = array();
-		foreach ( $userLongevity as $userID => $user) {
-			if ( $user["longevity"]["anniversary"] < 0 && $user["longevity"]["y"] == 0) {
-				$newRecruits[] = $user;
-			}
-		}
+            // Only if they're not a recruit
+            $isRecruit = strcasecmp(substr($user['user']->username, 0, 2), 'RT') == 0;
+            if (!$isRecruit) {
+                $result = self::findMissingAwards($user);
+                $awards = $result['required'];
 
-		// Start building the report text
-		$reportText	=  "";
-		$reportText	.= "[block][size=18]Upcoming Anniversaries[/size][/block]";
-		if (count($upcomingAnniversaries)) {
-			foreach ($upcomingAnniversaries as $key => $user) {
-				$reportText .= "[block]" . $user["username"] . "   (" . ($user["longevity"]["y"]+1) . "y)[/block]";
-			}
-		} else {
-			$reportText .= "[block]None[/block]";
-		}
+                $additionalFields['shouldHave'] = $awards;
+                $additionalFields['alreadyHas'] = $result['has'];
 
-		$reportText	.= "[block][size=18]Anniversaries just past[/size][/block]";
-		if (count($pastAnniversaries)) {
-			foreach ($pastAnniversaries as $key => $user) {
-				$reportText .= "[block]" . $user["username"] . "   (" . ($user["longevity"]["y"]) . "y)[/block]";
-			}
-		} else {
-			$reportText .= "[block]None[/block]";
-		}
+                // Sort the "has" part by awardID and awardedNumber ...
+                usort($result['has'], function ($a, $b) {
+                    if ($a->awardID > $b->awardID) return 1;
+                    if ($a->awardID < $b->awardID) return -1;
 
-		$reportText	.= "[block][size=18]Welcome new Recruits[/size][/block]";
-		if (count($newRecruits)) {
-			foreach ($newRecruits as $key => $user) {
-				$reportText .= "[block]" . $user["username"] . "[/block]";
-			}
-		} else {
-			$reportText .= "[block]None[/block]";
-		}
+                    if ($a->awardedNumber > $b->awardedNumber) return 1;
+                    return -1;
+                });
 
-		$reportText	.= "[block][align=center][size=18]Longevity Ribbons[/size][/align][/block]";
-		$reportText 	.= "[table]";
-		$reportText 	.= "[tr][td]User/Status[/td][td]Enlisted/Should Have[/td][td]Longevity/Has[/td][/tr]";
-		$reportText	.= "[tr][td][/td][td][/td][td][/td][/tr]";
+                // so the user's highest award is accurate.
+                $additionalFields['highest'] = count($result['has']) ? array_pop($result['has']) : false;
 
-		foreach ($userLongevity as $userID => $user) {
-			// Get total months longevity
-			$totalMonths = $user["longevity"]["months"];
+                if (count($awards)) {
+                    $awardsToAdd = array_merge($awardsToAdd, $awards);
+                }
+            }
 
-			// Determine eligible longevity tier from master index
-			$eligibleTierID = -1;
-			for ($i=0; $i<count($awardsIndex); $i++) {
-				if ($totalMonths >= $awardsIndex[$i]["minMonths"]) {
-					$eligibleTierID = $awardsIndex[$i]["tierID"];
-				}
-			}
+            $stats[$user['user']->userID] = array_merge([
+                'id' => $user['user']->userID,
+                'username' => $user['user']->username,
+                'longevity' => $user['longevity'],
+                'enlistment' => $user['longevity']['join']->format('Y-m-d'),
+                'added' => [],
+                'isRecruit' => $isRecruit,
+            ], $additionalFields);
+        }
 
-			// Check if the member has their eligible tier
-			$sql = "SELECT 		a.*
-				FROM		wcf".WCF_N."_unkso_issued_award AS a
-				WHERE		a.tierID = ?
-				AND		a.userID = ?
-				LIMIT 		1";
-			$statement = WCF::getDB()->prepareStatement($sql);
-			$statement->execute(array($eligibleTierID, $user["userID"]));
-			$row = $statement->fetchArray();
-			if (empty($row)) {
-				$hasEligibleTier = false;
-			} else {
-				$hasEligibleTier = true;
-			}
+        // Award all missing awards
+        foreach ($awardsToAdd as $award) {
+            $result = $this->addAward($award);
 
-			// Get the award details for the eligible tier for later use
-            $eligibleTierObject = AwardTier::getTierByID($eligibleTierID);
-            $eligibleURL = $eligibleTierObject->ribbonURL;
-            $eligibleName = $eligibleTierObject->getAward()->title;
-            $eligibleLevel = $eligibleTierObject->level;
-            $eligibleDescription = $eligibleTierObject->getAward()->description;
+            if ($result) {
+                $stats[$award['user']->userID]['added'][] = $result;
+            }
+        }
 
-			// Get all awards issued to this user
-			$sql = "SELECT		ia.*, t.ribbonURL, t.level, a.title
-				FROM		wcf".WCF_N."_unkso_issued_award AS ia
-				INNER JOIN	wcf".WCF_N."_unkso_award_tier AS t
-				ON		ia.tierID = t.tierID
-				INNER JOIN	wcf".WCF_N."_unkso_award AS a
-				ON		t.awardID = a.awardID
-				WHERE		ia.userID = ?";
-			$statement = WCF::getDB()->prepareStatement($sql);
-			$statement->execute(array($user["userID"]));
-			$userAwards = array();
-			while ($row = $statement->fetchArray()) {
-				$userAwards[] = $row;
-			}
+        // Clear the cache to make all awards available
+        IssuedAwardCacheBuilder::getInstance()->reset();
 
-			// Check to find the highest longevity award issued to this user
-			$highestName = "Unknown";
-			$highestLevel = "[?]";
-			$highestURL = "blank";
-			for ($i=count($awardsIndex)-1; $i>=0; $i--) {
-				$found = false;
-
-				for($j=0; $j<count($userAwards); $j++) {
-					if ($userAwards[$j]["tierID"] == $awardsIndex[$i]["tierID"]) {
-						$highestName = $userAwards[$j]["title"];
-						$highestLevel = $userAwards[$j]["level"];
-						$highestURL = $userAwards[$j]["ribbonURL"];
-						$found = true;
-						break;
-					}
-				}
-
-				if($found) break;
-			}
-
-			// Add eligible award for the user, if not a RT
-			$isRecruit = strcasecmp( substr($user["username"], 0, 2), "RT") == 0;
-			if (!$isRecruit && !$hasEligibleTier) {
-				$insertDate = date_format( date_create("now"), "Y-m-d" );
-
-				$tier = AwardTier::getTierByID($eligibleTierID); // Received tier
-				$user = new User($user['userID']); // Receiving user
-				$author = new User(5517); // Automated Account
-
-                // Give the award
-				$result = IssuedAward::giveToUser($user, $tier, $eligibleDescription, $insertDate, true, $author);
-
-				$awardAdded = $result ? true : false;
-			}
-			
-			// Back to building the report
-			$reportText	.= "[tr][td]";
-			$reportText	.= "[size=14]".$user["username"]."[/size]";
-			$reportText	.= "[/td][td]";
-			$reportText	.= $user["enlistment"];
-			$reportText	.= "[/td][td]";
-
-			// In case longevity did not compute for some reason
-			if ($user["longevity"]) {
-				$reportText .=  $user["longevity"]["interval"];
-			} else {
-				$reportText .= "Unknown";
-			}
-			$reportText	.= "[/td]";
-
-			$reportText	.= "[/tr]";
-			$reportText	.= "[tr]";
-			$reportText	.= "[td]";
-			
-			// If they have the correct tier award, and whether it was added
-			if (!$isRecruit) {
-				if ($hasEligibleTier) { $reportText .= "ok"; }
-				else {
-					if ($awardAdded) {
-						$reportText .= "[block]Successfully added[/block][block]".$eligibleName." [".$eligibleLevel."][/block][img]".$eligibleURL."[/img]";
-					} else {
-						$reportText .= "Error adding award!";
-					}
-				}
-			} else {
-				$reportText .= "Recruit; not yet eligible";	
-			}
-			
-			// Other award details, highest/eligible
-			$reportText	.= "[/td]";
-			$reportText	.= "[td]";
-			$reportText	.= "[block]".$eligibleName." [".$eligibleLevel."][/block][img]".$eligibleURL."[/img]";
-			$reportText	.= "[/td]";
-			$reportText	.= "[td]";
-			$reportText	.= "[block]".$highestName." [".$highestLevel."][/block][img]".$highestURL."[/img]";
-			$reportText	.= "[/td]";
-			$reportText	.= "[/tr]";
-
-			$eligibleName = $eligibleLevel = $eligibleURL = null;
-			$highestName = $highestLevel = $highestURL = null;
-			$hasEligibleTier = null;
-			$isRecruit = false;
-		}
-		$reportText 	.= "[/table]";
-
-		// Current date in correct format
-		$theDate = DateUtil::format(DateUtil::getDateTimeByTimestamp(TIME_NOW), DateUtil::DATE_FORMAT);
-
-		// Create the thread
-		$boardID = 115; // Engineering office
-		$topic = "Longevity Digest (".$theDate.")";
-		$nowTime = TIME_NOW;
-		$username = "Automated Post Service Account";
-		$lastPostTime = TIME_NOW;
-		$isClosed = 1;
-
-		// Insert thread into db
-		$sql = "INSERT INTO wbb".WCF_N."_thread
-				    (boardID, topic, time, username, lastPostTime, isClosed)
-			     VALUES ('$boardID', '$topic', '$nowTime', '$username', '$lastPostTime', '$isClosed')";
-		$statement = WCF::getDB()->prepareStatement($sql);
-		$statement->execute();
-
-		// Get last insert ID for post building
-		$lastInsertID = WCF::getDB()->getInsertID("wbb".WCF_N."_thread", "threadID");
-
-		// Create the post
-		$thread = new Thread($lastInsertID);
-		$board = BoardCache::getInstance()->getBoard($boardID);
-
-		$postData = array(
-			'threadID' => $lastInsertID,
-			'subject' => $topic,
-			'time' => TIME_NOW,
-			'message' => $reportText,
-			'userID' => 5517,
-			'username' => "Automated Post Service Account",
-			'isDisabled' => 0,
-			'enableHtml' => 1
-		);
-
-		$postCreateParameters = array(
-			'data' => $postData,
-			'thread' => $thread,
-			'board' => $board,
-			'isFirstPost' => true,
-			'attachmentHandler' => null
-		);
-
-		// Make the post
-		$postAction = new PostAction(array(), 'create', $postCreateParameters);
-		$resultValues = $postAction->executeAction();
-
-		// Update the thread with first post data
-		$threadEditor = new ThreadEditor($thread);
-		$threadEditor->update(array(
-			'firstPostID' => $resultValues['returnValues']->postID,
-			'lastPostID' => $resultValues['returnValues']->postID
-		));
-
+        $this->createForumPost($stats, $lists);
 	}
 
+	protected function createForumPost($stats, $lists)
+    {
+        $options = [
+            'stats' => $stats,
+            'recruits' => $lists['recruits'],
+            'upcoming' => $lists['upcoming'],
+            'past' => $lists['past'],
+        ];
+
+        $reportText = TemplateEngine::getInstance()->fetch('__longevityDigestNewThread', 'wcf', $options);
+
+        // Current date in correct format
+        $theDate = DateUtil::format(new DateTime, DateUtil::DATE_FORMAT);
+
+        // Create the thread
+        $boardID = 115; // 115 = Engineering Office
+        $topic = "Longevity Digest ($theDate)";
+        $username = "Automated Post Service Account";
+        $nowTime = TIME_NOW;
+        $lastPostTime = TIME_NOW;
+        $isClosed = 1;
+
+        // Insert thread into db
+        $sql = "INSERT INTO wbb".WCF_N."_thread
+				    (boardID, topic, time, username, lastPostTime, isClosed)
+			     VALUES ('$boardID', '$topic', '$nowTime', '$username', '$lastPostTime', '$isClosed')";
+        $statement = WCF::getDB()->prepareStatement($sql);
+        $statement->execute();
+
+        // Get last insert ID for post building
+        $lastInsertID = WCF::getDB()->getInsertID("wbb".WCF_N."_thread", "threadID");
+
+        // Create the post
+        $thread = new Thread($lastInsertID);
+        $board = BoardCache::getInstance()->getBoard($boardID);
+
+        $postData = array(
+            'threadID' => $lastInsertID,
+            'subject' => $topic,
+            'time' => TIME_NOW,
+            'message' => $reportText,
+            'userID' => 5517,
+            'username' => "Automated Post Service Account",
+            'isDisabled' => 0,
+            'enableHtml' => 1
+        );
+
+        $postCreateParameters = array(
+            'data' => $postData,
+            'thread' => $thread,
+            'board' => $board,
+            'isFirstPost' => true,
+            'attachmentHandler' => null
+        );
+
+        // Make the post
+        $postAction = new PostAction(array(), 'create', $postCreateParameters);
+        $resultValues = $postAction->executeAction();
+
+        // Update the thread with first post data
+        $threadEditor = new ThreadEditor($thread);
+        $threadEditor->update(array(
+            'firstPostID' => $resultValues['returnValues']->postID,
+            'lastPostID' => $resultValues['returnValues']->postID
+        ));
+    }
+
 	public function getLongevity($date) {
-		/* 
-		* Validate the date format is ####-##-##
-		* Should be sufficient until membership plugin is done with the 
-		* membership data available and validated in the db already
-		*/ 
-		if (preg_match("/^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[1-2][0-9]|3[0-1])$/",$date)) {
-			$datetime1 = date_format ( date_create($date), "U" );
-			$datetime2 = date_format ( date_create("now"), "U" );
+	    $object = DateTime::createFromFormat('Y-m-d', $date);
+	    if (!$object || $object->format('Y-m-d') != $date) return false; // Validate the correct date format YYYY-MM-DD
 
-			$diff = date_diff(date_create($date),date_create("now"));
-			$diffFormatted = $this->myFormatInterval($diff, true);
-			//(DateUtil::formatInterval($diff, true));
+        $now = new DateTime();
 
-			$years = $diff->format('%y');
-			$months = $diff->format('%m');
-			$days = $diff->format('%d');
+        $interval = $object->diff($now);
+        $years = $interval->y;
+        $months = $interval->m;
+        $days = $interval->d;
 
-			$numDays = abs($datetime2 - $datetime1)/60/60/24;
+        $anniversary = false;
+        if ($months == 11 && $days > 22) {
+            $anniversary = 1;
+        }
+        if ($months == 0 && $days < 14) {
+            $anniversary = -1;
+        }
 
-			$intervalArr = array();
-			//$years = (int)($numDays / 365);
-			//$months = (int)(($numDays - ($years * 365))/30);
-			//$days = (int)($numDays - ($years * 365) - ($months * 30));
-			$numMonths = (int)($numDays / 30);
-
-			$anniversary = 0;
-			if ($months == 11 && $days > 22) {
-				$anniversary = 1;
-			}
-			if ($months == 0 && $days < 8) {
-				$anniversary = -1;
-			}
-
-			$intervalArr = array(
-				'days' => $numDays,
-				'months' => $numMonths,
-				'y' => $years,
-				'm' => $months,
-				'd' => $days,
-				'anniversary' => $anniversary,
-				'interval' => $diffFormatted
-			);
-
-			return $intervalArr;
-		} else {
-			return false;
-		}
+        return [
+            'y' => $years,
+            'm' => $months,
+            'd' => $days,
+            'absoluteMonths' => $years * 12 + $months,
+            'anniversary' => $anniversary,
+            'join' => $object,
+            'interval' => $this->myFormatInterval($interval),
+        ];
 	}
 
 	public function getSortOrder($userTitle) {
-		/* 
+		/*
 		* This paygrade check is placeholder until membership
-		* plugin is ready with that data available. Currently 
+		* plugin is ready with that data available. Currently
 		* just checks usertitle and extracts paygrade.
 		*/
 		if ($userTitle == "" || $userTitle == null) {
@@ -408,32 +354,17 @@ class LongevityReportCronjob extends AbstractCronjob
 		return $number;
 	}
 
-	public function sortByOrder($a, $b) {
-		if ($b['sortorder'] == $a['sortorder']) {
-			// Tried sorting by name, not including rank prefix
-			$nameA = substr( strstr($a['username'], '.'), 1);
-			$nameB = substr( strstr($b['username'], '.'), 1);
-
-			// Tried sorting by name, including rank prefix
-			return $b["username"] - $a["username"];
-			
-			// Neither work quite as expected.. need a name sorting solution.
-		}
-
-		return $b['sortorder'] - $a['sortorder'];
-	}
-
-	/* 
+	/*
 	* Adapted function from DateUtil class. Removed weeks/hours/minutes
-	* 
+	*
 	* Returns a formatted date interval. If $fullInterval is set true, the
 	* complete interval is returned, otherwise a rounded interval is used.
-	* 
+	*
 	* @param	\DateInterval	$interval
 	* @param	boolean		$fullInterval
 	* @return	string
-	*/ 
-	public static function myFormatInterval(\DateInterval $interval, $fullInterval = false) {
+	*/
+	public static function myFormatInterval(DateInterval $interval, $fullInterval = false) {
 		$years = $interval->format('%y');
 		$months = $interval->format('%m');
 		$days = $interval->format('%d');
