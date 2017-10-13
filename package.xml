@@ -26,7 +26,7 @@
 
 		<!-- XMLs -->
 		<instruction type="cronjob">xml/cronjob.xml</instruction>
-		<instruction type="option">xml/option.xml</instruction>
+		<!-- <instruction type="option">xml/option.xml</instruction> -->
 		<instruction type="language">xml/language/*.xml</instruction>
 		<instruction type="acpMenu">xml/acpMenu.xml</instruction>
 	</instructions>
