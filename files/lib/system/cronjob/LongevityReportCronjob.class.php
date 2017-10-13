@@ -137,6 +137,18 @@ class LongevityReportCronjob extends AbstractCronjob
         ];
     }
 
+    protected function buildLongevityList($users)
+    {
+        foreach ($users as &$user) {
+            $user = [
+                'user' => $user,
+                'longevity' => $this->getLongevity($user->userOption40),
+            ];
+        }
+
+        return $users;
+    }
+
     /**
      * Adapted function from DateUtil class. Removed weeks/hours/minutes
      *
