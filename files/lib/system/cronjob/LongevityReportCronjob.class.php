@@ -24,13 +24,10 @@ class LongevityReportCronjob extends AbstractCronjob
     {
         parent::execute($cronjob);
 
-        // Get a sorted list of all clan members
+        // Get a sorted list of all clan members and longevity
         $users = array_map(function ($u) {
             return ['user' => $u, 'longevity' => $this->getLongevity($u->userOption40)];
         }, $this->getClanMembers());
-
-        // Turn the sorted user list into a longevity list
-        $users = $this->buildLongevityList($users);
 
         // Generate lists for upcoming and past anniversaries as well as new recruits
         $lists = ['upcoming' => [], 'past' => [], 'recruits' => []];
@@ -135,18 +132,6 @@ class LongevityReportCronjob extends AbstractCronjob
             'join' => $object,
             'interval' => $this->myFormatInterval($interval),
         ];
-    }
-
-    protected function buildLongevityList($users)
-    {
-        foreach ($users as &$user) {
-            $user = [
-                'user' => $user,
-                'longevity' => $this->getLongevity($user->userOption40),
-            ];
-        }
-
-        return $users;
     }
 
     /**
