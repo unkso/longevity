@@ -26,7 +26,13 @@ class LongevityReportCronjob extends AbstractCronjob
 
         // Get a sorted list of all clan members and longevity
         $users = array_map(function ($u) {
-            return ['user' => $u, 'longevity' => $this->getLongevity($u->userOption40)];
+            $longevityDate = '';
+            if ($u->userOption40 === '') {
+                $longevityDate = $this->convertRegistrationToJoinDate($u->registrationDate);
+            } else {
+                $longevityDate = $u->userOption40;
+            }
+            return ['user' => $u, 'longevity' => $this->getLongevity($longevityDate)];
         }, $this->getClanMembers());
 
         // Generate lists for upcoming and past anniversaries as well as new recruits
@@ -426,5 +432,11 @@ class LongevityReportCronjob extends AbstractCronjob
             'firstPostID' => $resultValues['returnValues']->postID,
             'lastPostID' => $resultValues['returnValues']->postID
         ));
+    }
+
+    private function convertRegistrationToJoinDate($timestamp) {
+        $dt = new DateTime;
+        $dt->setTimestamp($timestamp);
+        return $dt->format('Y-m-d');
     }
 }
