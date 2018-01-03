@@ -3,8 +3,8 @@
 	<packageinformation>
 		<packagename>Automated Longevity Awards</packagename>
 		<packagedescription>Automatically checks member longevity and awards longevity ribbons as needed</packagedescription>
-		<version>0.0.2</version>
-		<date>2017-01-14</date>
+		<version>0.0.3</version>
+		<date>2018-01-02</date>
 	</packageinformation>
 
 	<authorinformation>
@@ -39,5 +39,9 @@
 		<instruction type="cronjob">xml/cronjob.xml</instruction>
 		<instruction type="language">xml/language/*.xml</instruction>
 		<instruction type="acpMenu">xml/acpMenu.xml</instruction>
+	</instructions>
+
+	<instructions type="update" fromversion="0.0.2">
+		<instruction type="file">files.tar</instruction>
 	</instructions>
 </package>
